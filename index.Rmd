@@ -1,0 +1,147 @@
+---
+title: "Practical Machine Learning Project"
+author: "M. Nelson"
+date: "December 13, 2015"
+output: html_document
+---
+
+## Executive Summary
+The purpose of this project is to use machine learning techniques to evaluate Human Activity Recognition data. The specific data is the Weight Lifting Exercises Dataset available at:
+
+http://groupware.les.inf.puc-rio.br/har#weight_lifting_exercises
+
+The goal was to evaluate how well a particular exercise was done by six participants. Using data captured from a series of sensors, they hoped to recognize whether the exercise was done correctly or was done using one of four incorrect techniques. The machine learning task is to use the sensor data to classify the activity into one of these five categories.
+
+### Data Citation:
+Velloso, E.; Bulling, A.; Gellersen, H.; Ugulino, W.; Fuks, H. Qualitative Activity Recognition of Weight Lifting Exercises. Proceedings of 4th International Conference in Cooperation with SIGCHI (Augmented Human '13) . Stuttgart, Germany: ACM SIGCHI, 2013.
+
+## Submission Goal
+This project is given two datasets to use. The first (pml-training.csv) has nearly 20K observations from the sensors and are labeled as activity A through E. All evaluation to create the final model must be done with this dataset.
+
+The second dataset (pml-testing.csv) has only 20 observations without an activity label. The goal is to use the model trained with the training set to predict the correct classification label for these 20 required observations.
+
+## Summary of Model Building Approach
+Steps to complete this project:
+
+1) Select features
+2) Split data to training, testing, and validation sets
+3) Train multiple classification models with the training set and evaluate on the testing set
+4) Stack the fitted models and again evaluate on the testing set
+5) Perform a final out-of-sample check with the validation set
+6) Apply the final models to the 20 required observations
+
+These steps are detailed in the following sections.
+
+## Feature Selection
+The source dataset has a label column ("classe") and 159 other columns that could potentially be used as features. The feature selection excluded:
+
+* Indexes
+
+* Time stamps (The final test observations are given as single data points so any time sequence learning on the training data would not help with the final predictions.)
+
+* Columns with mostly missing or NA entries. (About 100 of the columns are mostly missing data.)
+
+The remaining columns were selected using the below code and results in 52 features that were used to fit the models:
+```{r,eval=FALSE}
+# feature selection
+data <- subset(data, select = grep("^(roll|pitch|yaw|total)|_(x|y|z)$|classe", colnames(data), value = TRUE))
+```
+
+
+## Data Split and Usage
+The pml-training dataset was split into 60% training, 20% testing, and 20% validation sets. The individual models were trained on the training set. Predictions were made on the testing set and checked against the actual classifications. Also the method of stacking the fitted models was checked on the testing set. Once all model adjustments were completed, the final stacked model was run once against the validation set.
+Code to split the data:
+```{r, eval=FALSE}
+inTrain <- createDataPartition(y=data$classe, p=0.6, list=FALSE)
+training <- data[inTrain,]
+checkData <- data[-inTrain,]
+inTest <- createDataPartition(y=checkData$classe, p=0.5, list=FALSE)
+testing <- checkData[inTest,]
+validation <- checkData[-inTest,]
+```
+
+## Individual Model Fits and Cross Validation
+Several classification algorithms were used to create a set of fitted models. For the models supported by the caret package, two different re-sampling techniques were tried: k-fold cross validation and bootstrapping. These were done with method="cv" using 10-folds and with method="boot" using 25 resamples. In each case, the bootstrapping method had equal or greater accuracy when checked on the test set so boostrapping was used for each model. All other train-control parameters were kept at the caret default. (svm model is not supported by caret and this model was run with all defaults and no resampling.)
+
+Below are the models used. With each is the Accuracy when run on the testing dataset:
+
+* Recursive Partitioning and Regression Trees (rpart) - 50.62%
+
+* Linear Discriminant Analysis (lda) - 70.79%
+
+* Support Vector Machines (svm) - 94.11%
+
+* Generalized Boosted Regression Modeling (gbm) - 96.38%
+
+* Random Forest (rf) - 99.03%
+
+The random forest performed very well on its own. The confusion matrix is printed here for comparison against any improvements once all models are stacked:
+```{r, echo=FALSE}
+load("cmrf.rda")
+print(cmrf$table)
+```
+
+## Stacking the Models
+The models fitted with the training set were used to predict the classifications on the testing set. Each of these sets of predictions along with the true classification label were formed into a data frame. A model was then fit on this data against the true classification. Several model algorithms were tried for stacking the models. Random forest produced the best accuracy. Below is a snippet of code for this step along with the resulting confusion matrix. As the models were still being adjusted after using the testing set, the Accuracy of this model (99.31%) is still considered in-sample error.
+
+```{r,eval=FALSE}
+stackDF <- data.frame(prpart, plda, psvm, pgbm, prf, classe=testing$classe)
+fitstack <- train(classe ~ ., method="rf", data=stackDF
+pstack <- predict(fitstack, stackDF)
+cmstack <- confusionMatrix(pstack, testing$classe)
+print(cmstack$table)
+print(cmstack$overall)
+```
+```{r, echo=FALSE}
+load("cmstack.rda")
+print(cmstack$table)
+print(cmstack$overall)
+```
+
+
+## Final Validation and Out-of-Sample Error
+The steps so far have generated a model fit for each of five algorithms and an additional model fit for stacking the predictions from each of these models. In this step, the validation set was used for the first time. This produced an out-of-sample error. Below is a snippet of code for this step along with the resulting confusion matrix and accuracy.
+
+This shows the out-of-sample Accuracy to be 99.41%.
+
+```{r,eval=FALSE}
+pvrpart <- predict(fitrpart, validation)
+pvlda <- predict(fitlda, validation)
+pvsvm <- predict(fitsvm, validation)
+pvgbm <- predict(fitgbm, validation)
+pvrf <- predict(fitrf, validation)
+
+stackvDF <- data.frame(prpart=pvrpart, plda=pvlda, psvm=pvsvm, pgbm=pvgbm, prf=pvrf)
+pvalid <- predict(fitstack, stackvDF)
+cmvalid <- confusionMatrix(pvalid, validation$classe)
+print(cmvalid$table)
+print(cmvalid$overall)
+```
+```{r, echo=FALSE}
+load("cmvalid.rda")
+print(cmvalid$table)
+print(cmvalid$overall)
+```
+
+
+## Prediction on the 20 Cases for Submission
+The random forest model created from the training set produced a high accuracy on the testing set. Stacking the other models increased the accuracy slightly. Then when the final stacked model was run on the out-of-sample validation set, the accuracy was unexpectedly even slightly better. So there was a rather high confidence that the model would select the correct classifications on the required 20 observations. If a submitted answer was wrong, the confusion matrix could be referenced to estimate the next most likely true classification given the originally predicted classification.
+
+Below is a snippet of code that used the fitted models to generate the final answers:
+```{r, eval=FALSE}
+FinalTest <- read.csv("./pml-testing.csv")
+FinalTest <- subset(FinalTest, select = grep("^(roll|pitch|yaw|total)|_(x|y|z)$|classe", colnames(FinalTest), value = TRUE))
+
+pfrpart <- predict(fitrpart, FinalTest)
+pflda <- predict(fitlda, FinalTest)
+pfsvm <- predict(fitsvm, FinalTest)
+pfgbm <- predict(fitgbm, FinalTest)
+pfrf <- predict(fitrf, FinalTest)
+
+stackfDF <- data.frame(prpart=pfrpart, plda=pflda, psvm=pfsvm, pgbm=pfgbm, prf=pfrf)
+pvalid <- predict(fitstack, stackfDF)
+answers <- as.character(pvalid)
+print(answers)
+```
+
+
